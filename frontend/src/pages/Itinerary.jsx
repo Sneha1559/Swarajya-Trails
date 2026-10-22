@@ -1,10 +1,35 @@
 
 import { useState } from "react";
-import { CalendarDays, MapPin, Sparkles } from "lucide-react";
+import { MapPin, CalendarDays, Clock, Compass, Sparkles, CheckCircle2, AlertCircle } from "lucide-react";
+import "../App.css";
 
-const API = "http://127.0.0.1:8000";
+const API_URL = "http://127.0.0.1:8000";
 
-export default function Itinerary() {
+function formatItinerary(value) {
+  if (typeof value !== "string") {
+    if (Array.isArray(value)) return value.map(String);
+    if (value && typeof value === "object") {
+      return Object.entries(value).map(([key, item]) => `${key}: ${item}`);
+    }
+    return [String(value ?? "")];
+  }
+
+  return value
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.replace(/^\s*[-*•]\s*/, "").trim())
+    .filter(Boolean);
+}
+
+function getDayTitle(line) {
+  return /^(day\s*\d+|day\s*one|day\s*two|day\s*three|दिन\s*\d+)/i.test(line);
+}
+
+function getTime(line) {
+  return /^(\d{1,2}(:\d{2})?\s?(AM|PM)|morning|afternoon|evening|night|early morning)\b/i.test(line);
+}
+
+function Itinerary() {
   const [destination, setDestination] = useState("Raigad Fort");
   const [days, setDays] = useState("2");
   const [travelStyle, setTravelStyle] = useState("Heritage and history");
@@ -12,110 +37,213 @@ export default function Itinerary() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function createItinerary(e) {
-    e.preventDefault();
+  async function generateItinerary(event) {
+    event.preventDefault();
     setLoading(true);
     setError("");
     setItinerary("");
 
     try {
-      const response = await fetch(`${API}/plan-itinerary`, {
+      const response = await fetch(`${API_URL}/plan-itinerary`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          destination,
+          destination: destination.trim(),
           days: Number(days),
           travel_style: travelStyle,
         }),
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Could not plan your trip.");
 
+      if (!response.ok) {
+        throw new Error(
+          typeof data.detail === "string"
+            ? data.detail
+            : "Unable to generate your itinerary. Please try again."
+        );
+      }
+
+      const result = data.itinerary ?? data.answer ?? data;
       setItinerary(
-        typeof data === "string" ? data :
-        data.itinerary || data.plan || data.result ||
-        JSON.stringify(data, null, 2)
+        typeof result === "string" ? result : JSON.stringify(result, null, 2)
       );
     } catch (err) {
-      setError(err.message || "Could not connect to the backend.");
+      setError(err.message || "Could not connect to the Swarajya Trails server.");
     } finally {
       setLoading(false);
     }
   }
 
+  const lines = formatItinerary(itinerary);
+  const sections = [];
+  let currentSection = null;
+
+  lines.forEach((line) => {
+    if (getDayTitle(line)) {
+      currentSection = { title: line, items: [] };
+      sections.push(currentSection);
+    } else if (currentSection) {
+      currentSection.items.push(line);
+    } else {
+      if (!sections.length) {
+        currentSection = { title: "Your Heritage Journey", items: [] };
+        sections.push(currentSection);
+      }
+      currentSection.items.push(line);
+    }
+  });
+
   return (
-    <section className="page-container">
-      <div className="page-header">
-        <span className="eyebrow"><CalendarDays size={15} /> Your Heritage Journey</span>
-        <h1>Plan a Journey <span className="gold-text">Through Time</span></h1>
-        <p>Create a personalised travel plan for Maharashtra's historic forts, based on your destination, duration, and travel interests.</p>
-      </div>
+    <main className="itinerary-page">
+      <section className="itinerary-heading">
+        <span className="itinerary-eyebrow">
+          <Compass size={16} /> YOUR JOURNEY, THOUGHTFULLY PLANNED
+        </span>
+        <h1>
+          Your next <span>great journey.</span>
+        </h1>
+        <p>
+          Build a personalised Maharashtra heritage trip, one day at a time.
+        </p>
+      </section>
 
-      <div className="tool-layout">
-        <form className="tool-form" onSubmit={createItinerary}>
-          <h2>Trip details</h2>
-
-          <label>
-            Destination or fort
-            <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="e.g. Raigad Fort" required />
-          </label>
-
-          <label>
-            Trip duration
-            <select value={days} onChange={(e) => setDays(e.target.value)}>
-              <option value="1">1 day</option>
-              <option value="2">2 days</option>
-              <option value="3">3 days</option>
-              <option value="4">4 days</option>
-              <option value="5">5 days</option>
-              <option value="7">7 days</option>
-            </select>
-          </label>
-
-          <label>
-            Travel style
-            <select value={travelStyle} onChange={(e) => setTravelStyle(e.target.value)}>
-              <option>Heritage and history</option>
-              <option>Adventure and trekking</option>
-              <option>Nature and photography</option>
-              <option>Family-friendly</option>
-              <option>Relaxed exploration</option>
-            </select>
-          </label>
-
-          <button className="primary-button" disabled={loading}>
-            <Sparkles size={17} />
-            {loading ? "Planning your trip..." : "Generate Itinerary"}
-          </button>
-        </form>
-
-        <div className="results-panel">
-          <div className="results-heading">
-            <CalendarDays size={23} />
-            <div><h2>Your travel plan</h2><p>A personalised day-by-day outline</p></div>
+      <section className="itinerary-layout">
+        <form className="itinerary-form" onSubmit={generateItinerary}>
+          <div className="itinerary-card-heading">
+            <span className="itinerary-icon"><MapPin size={21} /></span>
+            <div>
+              <h2>Plan your journey</h2>
+              <p>Tell us what your trip should look like.</p>
+            </div>
           </div>
 
-          {error && <div className="error-message">{error}</div>}
-          {loading && <div className="loading-message">Putting together your heritage journey...</div>}
+          <label htmlFor="destination">Destination or starting point</label>
+          <input
+            id="destination"
+            value={destination}
+            onChange={(e) => setDestination(e.target.value)}
+            placeholder="e.g. Raigad Fort, Pune"
+            required
+          />
 
-          {!itinerary && !loading && !error && (
-            <div className="empty-state">
-              <MapPin size={38} />
-              <h3>Your journey, thoughtfully planned</h3>
-              <p>Enter your destination and preferences to create your itinerary.</p>
+          <label htmlFor="days">Trip duration</label>
+          <select id="days" value={days} onChange={(e) => setDays(e.target.value)}>
+            <option value="1">1 day</option>
+            <option value="2">2 days</option>
+            <option value="3">3 days</option>
+            <option value="4">4 days</option>
+            <option value="5">5 days</option>
+            <option value="7">7 days</option>
+          </select>
+
+          <label htmlFor="travelStyle">Travel style</label>
+          <select
+            id="travelStyle"
+            value={travelStyle}
+            onChange={(e) => setTravelStyle(e.target.value)}
+          >
+            <option>Heritage and history</option>
+            <option>Adventure and trekking</option>
+            <option>Nature and photography</option>
+            <option>Family-friendly</option>
+            <option>Relaxed exploration</option>
+          </select>
+
+          <button className="itinerary-submit" type="submit" disabled={loading}>
+            <Sparkles size={17} />
+            {loading ? "Planning your journey..." : "Generate My Itinerary"}
+          </button>
+
+          <p className="itinerary-form-note">
+            <CheckCircle2 size={15} />
+            Personalised planning powered by AI
+          </p>
+        </form>
+
+        <section className="itinerary-results">
+          <div className="itinerary-results-heading">
+            <div>
+              <span className="itinerary-eyebrow">YOUR TRAVEL BLUEPRINT</span>
+              <h2>Your itinerary</h2>
+              <p>Your journey, organised into clear daily steps.</p>
+            </div>
+            <span className="itinerary-icon"><CalendarDays size={22} /></span>
+          </div>
+
+          {error && (
+            <div className="itinerary-error" role="alert">
+              <AlertCircle size={19} />
+              <span>{error}</span>
             </div>
           )}
 
-          {itinerary && (
-            <div className="itinerary-result">
-              <div className="ai-label">Your itinerary</div>
-              <p className="response-text">{itinerary}</p>
-              <p className="small-note">Check current access conditions, weather, and local guidance before travelling.</p>
+          {loading && (
+            <div className="itinerary-empty">
+              <span className="itinerary-loader"><Sparkles size={24} /></span>
+              <h3>Crafting your journey</h3>
+              <p>Finding a useful flow for your heritage adventure...</p>
             </div>
           )}
-        </div>
-      </div>
-    </section>
+
+          {!loading && !itinerary && !error && (
+            <div className="itinerary-empty">
+              <span className="itinerary-empty-icon"><MapPin size={29} /></span>
+              <h3>Your journey starts here</h3>
+              <p>
+                Choose your destination and preferences, then generate your
+                personalised day-by-day plan.
+              </p>
+            </div>
+          )}
+
+          {!loading && itinerary && (
+            <div className="itinerary-timeline">
+              {sections.map((section, index) => (
+                <article className="itinerary-day" key={`${section.title}-${index}`}>
+                  <div className="itinerary-day-marker">
+                    <span>{index + 1}</span>
+                    {index !== sections.length - 1 && (
+                      <div className="itinerary-day-line" />
+                    )}
+                  </div>
+
+                  <div className="itinerary-day-content">
+                    <span className="itinerary-day-label">
+                      DAY {index + 1}
+                    </span>
+                    <h3>{section.title}</h3>
+
+                    {section.items.length === 0 ? (
+                      <p>{section.title}</p>
+                    ) : (
+                      <div className="itinerary-activities">
+                        {section.items.map((item, itemIndex) => (
+                          <div className="itinerary-activity" key={`${item}-${itemIndex}`}>
+                            <Clock size={16} />
+                            <p>{item}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+
+              <div className="itinerary-tip">
+                <Sparkles size={18} />
+                <p>
+                  <strong>Before you travel:</strong> Check local conditions,
+                  opening arrangements and trekking safety. Travel times and
+                  access may vary.
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
+      </section>
+    </main>
   );
 }
+
+export default Itinerary;

@@ -4,43 +4,47 @@ import { Mountain, MapPin, ArrowUpRight } from "lucide-react";
 
 export default function Footer() {
   return (
-    <footer className="site-footer">
-      <div className="footer-main">
-        <div className="footer-brand">
-          <Link to="/" className="brand footer-logo">
-            <span className="brand-icon"><Mountain size={25} /></span>
-            <span>Swarajya <b>Trails</b></span>
+    <footer className="heritage-footer">
+      <div className="heritage-footer-grid">
+        <div>
+          <Link to="/" aria-label="Swarajya Trails home">
+            <span className="footer-brand">
+              <Mountain size={25} />
+              <span>Swarajya <strong>Trails</strong></span>
+            </span>
           </Link>
+
           <p>
-            Discover Maharashtra's legendary forts, explore its history,
-            and plan your next heritage adventure.
+            Discover Maharashtra's legendary forts, explore their history,
+            and plan your next heritage adventure with AI.
           </p>
-          <span className="footer-location">
-            <MapPin size={15} /> Maharashtra, India
-          </span>
+
+          <p className="footer-location">
+            <MapPin size={17} /> Maharashtra, India
+          </p>
         </div>
 
-        <div className="footer-links">
-          <h4>Explore</h4>
-          <Link to="/forts">Discover Forts</Link>
-          <Link to="/itinerary">Plan Your Journey</Link>
+        <div>
+          <h3>Explore</h3>
+          <Link to="/forts">Discover Forts</Link><br />
+          <Link to="/itinerary">Plan Your Journey</Link><br />
           <Link to="/compare">Compare Forts</Link>
         </div>
 
-        <div className="footer-links">
-          <h4>Discover History</h4>
-          <Link to="/history">Ask History AI</Link>
-          <Link to="/stories">Historical Stories</Link>
+        <div>
+          <h3>Discover History</h3>
+          <Link to="/history">Ask शिवदूत</Link><br />
+          <Link to="/stories">Historical Stories</Link><br />
           <Link to="/">Home</Link>
         </div>
       </div>
 
-      <div className="footer-bottom">
+      <div className="heritage-footer-bottom">
         <span>© {new Date().getFullYear()} Swarajya Trails</span>
         <span>Rooted in history. Made for explorers.</span>
-        <Link to="/" className="back-to-top">
+        <a href="#top" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
           Back to top <ArrowUpRight size={15} />
-        </Link>
+        </a>
       </div>
     </footer>
   );
