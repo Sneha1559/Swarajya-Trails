@@ -6,13 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.llm import get_llm
+from app.retrieval import KnowledgeBaseNotFoundError, retrieve_history
 
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env", override=True)
-INDEX_FOLDER = PROJECT_ROOT / "data" / "faiss_index"
 
 app = FastAPI(
     title="Swarajya Trails API",
@@ -57,31 +55,17 @@ def test_ai():
 
 @app.get("/ask-history")
 def ask_history(question: str = Query(..., min_length=3, max_length=1000)):
-    if not INDEX_FOLDER.exists():
-        raise HTTPException(
-            status_code=500,
-            detail="Knowledge base not found. Run build_knowledge_base.py first.",
-        )
-
     try:
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-        vector_store = FAISS.load_local(
-            str(INDEX_FOLDER),
-            embeddings,
-            allow_dangerous_deserialization=True,
-        )
-        retrieved_docs = vector_store.similarity_search(question, k=4)
+        retrieval = retrieve_history(question)
 
-        if not retrieved_docs:
+        if not retrieval.documents:
             return {
                 "question": question,
                 "answer": "I could not find relevant information in the historical documents.",
                 "sources": [],
             }
 
-        context = "\n\n".join(doc.page_content for doc in retrieved_docs)
+        context = retrieval.context
         prompt = f"""
 You are शिवदूत (Shivdoot), the historical AI guide for Swarajya Trails.
 Answer the user's question using only the historical context below.
@@ -97,15 +81,16 @@ User question:
 Give a clear, easy-to-understand answer.
 """
         response = get_llm(0.2).invoke(prompt)
-        sources = list(dict.fromkeys(
-            str(doc.metadata.get("source", "Unknown source"))
-            for doc in retrieved_docs
-        ))
         return {
             "question": question,
             "answer": response.content,
-            "sources": sources,
+            "sources": retrieval.sources,
         }
+    except KnowledgeBaseNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="Knowledge base not found. Run build_knowledge_base.py first.",
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -113,7 +98,6 @@ Give a clear, easy-to-understand answer.
             status_code=500,
             detail=f"Historical question answering failed: {exc}",
         )
-
 
 class FortRecommendationRequest(BaseModel):
     interests: str = "History and heritage"
