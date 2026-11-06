@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 # API keys and local secret files
 GroqAPI Swarajya-Trails.txt
+
+.venv/

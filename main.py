@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -6,7 +5,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from langchain_groq import ChatGroq
+from app.llm import get_llm
+
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
@@ -27,20 +27,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def get_llm(temperature: float = 0.3):
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="GROQ_API_KEY is missing. Check the .env file in the project root.",
-        )
-    return ChatGroq(
-        model="openai/gpt-oss-120b",
-        temperature=temperature,
-        api_key=api_key,
-    )
 
 
 @app.get("/")
