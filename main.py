@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -6,13 +5,12 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from app.llm import get_llm
+from app.graph import graph
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env", override=True)
-INDEX_FOLDER = PROJECT_ROOT / "data" / "faiss_index"
 
 app = FastAPI(
     title="Swarajya Trails API",
@@ -27,21 +25,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def get_llm(temperature: float = 0.3):
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
+def _graph_result(state, result_key: str, operation: str, status_code: int):
+    error = state.get("error")
+    if error:
+        details = error.get("details")
+        if details == "KnowledgeBaseNotFoundError":
+            raise HTTPException(
+                status_code=500,
+                detail="Knowledge base not found. Run build_knowledge_base.py first.",
+            )
+        if details == "HTTPException":
+            raise HTTPException(
+                status_code=500,
+                detail="GROQ_API_KEY is missing. Check the .env file in the project root.",
+            )
         raise HTTPException(
-            status_code=500,
-            detail="GROQ_API_KEY is missing. Check the .env file in the project root.",
+            status_code=status_code,
+            detail=f"{operation}: {details or error.get('message', 'Agent graph failed.')}",
         )
-    return ChatGroq(
-        model="openai/gpt-oss-120b",
-        temperature=temperature,
-        api_key=api_key,
-    )
 
+    result = state.get(result_key)
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"{operation}: graph returned no result.",
+        )
+    return result
 
 @app.get("/")
 def home():
@@ -69,56 +78,23 @@ def test_ai():
         raise HTTPException(status_code=502, detail=f"Groq AI request failed: {exc}")
 
 
+class ChatRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=1000)
+
 @app.get("/ask-history")
 def ask_history(question: str = Query(..., min_length=3, max_length=1000)):
-    if not INDEX_FOLDER.exists():
-        raise HTTPException(
-            status_code=500,
-            detail="Knowledge base not found. Run build_knowledge_base.py first.",
-        )
-
     try:
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        state = graph.invoke({"intent": "historical_question", "question": question})
+        result = _graph_result(
+            state,
+            "historical_answer",
+            "Historical question answering failed",
+            500,
         )
-        vector_store = FAISS.load_local(
-            str(INDEX_FOLDER),
-            embeddings,
-            allow_dangerous_deserialization=True,
-        )
-        retrieved_docs = vector_store.similarity_search(question, k=4)
-
-        if not retrieved_docs:
-            return {
-                "question": question,
-                "answer": "I could not find relevant information in the historical documents.",
-                "sources": [],
-            }
-
-        context = "\n\n".join(doc.page_content for doc in retrieved_docs)
-        prompt = f"""
-You are शिवदूत (Shivdoot), the historical AI guide for Swarajya Trails.
-Answer the user's question using only the historical context below.
-If the context does not contain the answer, say that the provided
-documents do not contain enough information. Do not invent historical facts.
-
-Historical context:
-{context}
-
-User question:
-{question}
-
-Give a clear, easy-to-understand answer.
-"""
-        response = get_llm(0.2).invoke(prompt)
-        sources = list(dict.fromkeys(
-            str(doc.metadata.get("source", "Unknown source"))
-            for doc in retrieved_docs
-        ))
         return {
-            "question": question,
-            "answer": response.content,
-            "sources": sources,
+            "question": result["question"],
+            "answer": result["answer"],
+            "sources": result["sources"],
         }
     except HTTPException:
         raise
@@ -127,7 +103,6 @@ Give a clear, easy-to-understand answer.
             status_code=500,
             detail=f"Historical question answering failed: {exc}",
         )
-
 
 class FortRecommendationRequest(BaseModel):
     interests: str = "History and heritage"
@@ -138,28 +113,21 @@ class FortRecommendationRequest(BaseModel):
 @app.post("/recommend-forts")
 def recommend_forts(request: FortRecommendationRequest):
     try:
-        prompt = f"""
-You are Swarajya Trails, a heritage travel assistant for Maharashtra.
-Recommend three suitable forts based on these preferences:
-Interests: {request.interests}
-Trekking difficulty: {request.difficulty}
-Preferred region: {request.region}
-
-For each fort, provide its name and location if known, historical
-significance, why it matches the preferences, and a practical travel
-consideration. Do not invent exact opening hours, ticket prices, or
-current travel conditions. Mark details that need verification.
-"""
-        response = get_llm(0.3).invoke(prompt)
+        state = graph.invoke({
+            "intent": "fort_recommendation",
+            "interests": request.interests,
+            "difficulty": request.difficulty,
+            "region": request.region,
+        })
+        result = _graph_result(state, "recommendation_result", "Fort recommendation failed", 502)
         return {
             "preferences": request.model_dump(),
-            "recommendations": response.content,
+            "recommendations": result["recommendations"],
         }
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Fort recommendation failed: {exc}")
-
 
 class ItineraryRequest(BaseModel):
     destination: str = Field(min_length=2, max_length=200)
@@ -170,29 +138,23 @@ class ItineraryRequest(BaseModel):
 @app.post("/plan-itinerary")
 def plan_itinerary(request: ItineraryRequest):
     try:
-        prompt = f"""
-You are Swarajya Trails, a Maharashtra heritage travel assistant.
-Create a practical {request.days}-day itinerary for {request.destination}.
-Travel style: {request.travel_style}
-
-For each day, suggest morning, afternoon and evening activities,
-relevant historical attractions, a sensible visit order, short historical
-explanations, and practical travel and safety tips. Do not invent exact
-opening hours, ticket prices, travel times, or current transport availability.
-Mention details travellers should verify. Format with headings and bullets.
-"""
-        response = get_llm(0.4).invoke(prompt)
-        return {
+        state = graph.invoke({
+            "intent": "itinerary_planning",
             "destination": request.destination,
             "days": request.days,
             "travel_style": request.travel_style,
-            "itinerary": response.content,
+        })
+        result = _graph_result(state, "itinerary_result", "Itinerary generation failed", 502)
+        return {
+            "destination": result["destination"],
+            "days": result["days"],
+            "travel_style": result["travel_style"],
+            "itinerary": result["itinerary"],
         }
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Itinerary generation failed: {exc}")
-
 
 class StoryRequest(BaseModel):
     fort: str = Field(min_length=2, max_length=200)
@@ -201,20 +163,13 @@ class StoryRequest(BaseModel):
 @app.post("/tell-story")
 def tell_story(request: StoryRequest):
     try:
-        prompt = f"""
-Create an engaging historical narrative about {request.fort} in Maharashtra.
-Include historical background, strategic importance, and notable events or
-people when supported by reliable knowledge. Do not invent quotations,
-conversations, or historical events. Label imagined scenes as creative
-reconstructions. Use accessible English and a suitable title.
-"""
-        response = get_llm(0.5).invoke(prompt)
-        return {"fort": request.fort, "story": response.content}
+        state = graph.invoke({"intent": "storytelling", "fort": request.fort})
+        result = _graph_result(state, "storytelling_result", "Story generation failed", 502)
+        return {"fort": result["fort"], "story": result["story"]}
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Story generation failed: {exc}")
-
 
 class CompareFortsRequest(BaseModel):
     fort_a: str = Field(min_length=2, max_length=200)
@@ -224,24 +179,97 @@ class CompareFortsRequest(BaseModel):
 @app.post("/compare-forts")
 def compare_forts(request: CompareFortsRequest):
     try:
-        prompt = f"""
-Compare these two Maharashtra forts for a heritage traveller:
-Fort A: {request.fort_a}
-Fort B: {request.fort_b}
-
-Compare historical significance, architecture, heritage experience,
-trekking difficulty if reliably known, and the type of traveller each
-fort may suit. Summarise the differences. Do not invent historical facts,
-current conditions, or exact distances. Mention information needing verification.
-Use a clear table if suitable.
-"""
-        response = get_llm(0.3).invoke(prompt)
-        return {
+        state = graph.invoke({
+            "intent": "fort_comparison",
             "fort_a": request.fort_a,
             "fort_b": request.fort_b,
-            "comparison": response.content,
+        })
+        result = _graph_result(state, "comparison_result", "Fort comparison failed", 502)
+        return {
+            "fort_a": result["fort_a"],
+            "fort_b": result["fort_b"],
+            "comparison": result["comparison"],
         }
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Fort comparison failed: {exc}")
+@app.post("/chat")
+def chat(request: ChatRequest):
+    try:
+        state = graph.invoke({"query": request.query})
+        error = state.get("error")
+        if error:
+            details = error.get("details")
+            if details == "KnowledgeBaseNotFoundError":
+                raise HTTPException(
+                    status_code=500,
+                    detail="Knowledge base not found. Run build_knowledge_base.py first.",
+                )
+            if details == "HTTPException":
+                raise HTTPException(
+                    status_code=500,
+                    detail="GROQ_API_KEY is missing. Check the .env file in the project root.",
+                )
+            status_code = 500 if error.get("agent") == "historical_question" else 502
+            raise HTTPException(
+                status_code=status_code,
+                detail=f"Conversational request failed: {details or error.get('message', 'Agent graph failed.')}",
+            )
+
+        if state.get("clarification_question"):
+            return {
+                "intent": "clarification",
+                "clarification": state["clarification_question"],
+            }
+
+        intent = state.get("intent")
+        if intent == "historical_question":
+            agent_result = state.get("historical_answer")
+            keys = ("question", "answer")
+        elif intent == "fort_recommendation":
+            agent_result = state.get("recommendation_result")
+            keys = ("recommendations",)
+        elif intent == "itinerary_planning":
+            agent_result = state.get("itinerary_result")
+            keys = ("destination", "days", "travel_style", "itinerary")
+        elif intent == "storytelling":
+            agent_result = state.get("storytelling_result")
+            keys = ("fort", "story")
+        elif intent == "fort_comparison":
+            agent_result = state.get("comparison_result")
+            keys = ("fort_a", "fort_b", "comparison")
+        elif intent == "recommendation_then_itinerary":
+            recommendation = state.get("recommendation_result")
+            itinerary = state.get("itinerary_result")
+            if not isinstance(recommendation, dict) or not isinstance(itinerary, dict):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Conversational request failed: graph returned no result.",
+                )
+            agent_result = {
+                "recommendations": recommendation.get("recommendations"),
+                "itinerary": {
+                    key: itinerary.get(key)
+                    for key in ("destination", "days", "travel_style", "itinerary")
+                },
+            }
+            keys = ("recommendations", "itinerary")
+        else:
+            agent_result = None
+            keys = ()
+
+        if not isinstance(agent_result, dict) or any(key not in agent_result for key in keys):
+            raise HTTPException(
+                status_code=502,
+                detail="Conversational request failed: graph returned no result.",
+            )
+        return {
+            "intent": intent,
+            "result": {key: agent_result[key] for key in keys},
+            "sources": state.get("source_names", []),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Conversational request failed: {exc}")
