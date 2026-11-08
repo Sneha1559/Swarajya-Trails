@@ -78,6 +78,9 @@ def test_ai():
         raise HTTPException(status_code=502, detail=f"Groq AI request failed: {exc}")
 
 
+class ChatRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=1000)
+
 @app.get("/ask-history")
 def ask_history(question: str = Query(..., min_length=3, max_length=1000)):
     try:
@@ -191,3 +194,82 @@ def compare_forts(request: CompareFortsRequest):
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Fort comparison failed: {exc}")
+@app.post("/chat")
+def chat(request: ChatRequest):
+    try:
+        state = graph.invoke({"query": request.query})
+        error = state.get("error")
+        if error:
+            details = error.get("details")
+            if details == "KnowledgeBaseNotFoundError":
+                raise HTTPException(
+                    status_code=500,
+                    detail="Knowledge base not found. Run build_knowledge_base.py first.",
+                )
+            if details == "HTTPException":
+                raise HTTPException(
+                    status_code=500,
+                    detail="GROQ_API_KEY is missing. Check the .env file in the project root.",
+                )
+            status_code = 500 if error.get("agent") == "historical_question" else 502
+            raise HTTPException(
+                status_code=status_code,
+                detail=f"Conversational request failed: {details or error.get('message', 'Agent graph failed.')}",
+            )
+
+        if state.get("clarification_question"):
+            return {
+                "intent": "clarification",
+                "clarification": state["clarification_question"],
+            }
+
+        intent = state.get("intent")
+        if intent == "historical_question":
+            agent_result = state.get("historical_answer")
+            keys = ("question", "answer")
+        elif intent == "fort_recommendation":
+            agent_result = state.get("recommendation_result")
+            keys = ("recommendations",)
+        elif intent == "itinerary_planning":
+            agent_result = state.get("itinerary_result")
+            keys = ("destination", "days", "travel_style", "itinerary")
+        elif intent == "storytelling":
+            agent_result = state.get("storytelling_result")
+            keys = ("fort", "story")
+        elif intent == "fort_comparison":
+            agent_result = state.get("comparison_result")
+            keys = ("fort_a", "fort_b", "comparison")
+        elif intent == "recommendation_then_itinerary":
+            recommendation = state.get("recommendation_result")
+            itinerary = state.get("itinerary_result")
+            if not isinstance(recommendation, dict) or not isinstance(itinerary, dict):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Conversational request failed: graph returned no result.",
+                )
+            agent_result = {
+                "recommendations": recommendation.get("recommendations"),
+                "itinerary": {
+                    key: itinerary.get(key)
+                    for key in ("destination", "days", "travel_style", "itinerary")
+                },
+            }
+            keys = ("recommendations", "itinerary")
+        else:
+            agent_result = None
+            keys = ()
+
+        if not isinstance(agent_result, dict) or any(key not in agent_result for key in keys):
+            raise HTTPException(
+                status_code=502,
+                detail="Conversational request failed: graph returned no result.",
+            )
+        return {
+            "intent": intent,
+            "result": {key: agent_result[key] for key in keys},
+            "sources": state.get("source_names", []),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Conversational request failed: {exc}")

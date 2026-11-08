@@ -1,5 +1,3 @@
-from typing import Callable
-
 from langgraph.graph import END, START, StateGraph
 
 from app.agents import (
@@ -9,18 +7,14 @@ from app.agents import (
     itinerary_planning_agent,
     storytelling_agent,
 )
+from app.orchestrator import orchestrator_agent
 from app.state import AgentState
 
 COMBINED_INTENT = "recommendation_then_itinerary"
 
 
 def _error_update(agent: str, message: str, error: Exception | None = None) -> AgentState:
-    update: AgentState = {
-        "error": {
-            "message": message,
-            "agent": agent,
-        }
-    }
+    update: AgentState = {"error": {"message": message, "agent": agent}}
     if error is not None:
         update["error"]["details"] = type(error).__name__
     return update
@@ -57,10 +51,7 @@ def fort_recommendation_node(state: AgentState) -> AgentState:
             difficulty=state.get("difficulty", "Any"),
             region=state.get("region", "Maharashtra"),
         )
-        return {
-            "recommendation_result": result,
-            "current_agent_output": result,
-        }
+        return {"recommendation_result": result, "current_agent_output": result}
     except Exception as exc:
         return _error_update("fort_recommendation", "Fort recommendation agent failed.", exc)
 
@@ -76,17 +67,13 @@ def itinerary_planning_node(state: AgentState) -> AgentState:
             "itinerary_planning",
             "No destination was selected or available in the recommendation result.",
         )
-
     try:
         result = itinerary_planning_agent(
             destination=destination,
             days=state.get("days", 1),
             travel_style=state.get("travel_style", "Balanced"),
         )
-        return {
-            "itinerary_result": result,
-            "current_agent_output": result,
-        }
+        return {"itinerary_result": result, "current_agent_output": result}
     except Exception as exc:
         return _error_update("itinerary_planning", "Itinerary planning agent failed.", exc)
 
@@ -115,12 +102,37 @@ def fort_comparison_node(state: AgentState) -> AgentState:
         return _error_update("fort_comparison", "Two forts are required for comparison.")
     try:
         result = fort_comparison_agent(fort_a, fort_b)
-        return {
-            "comparison_result": result,
-            "current_agent_output": result,
-        }
+        return {"comparison_result": result, "current_agent_output": result}
     except Exception as exc:
         return _error_update("fort_comparison", "Fort comparison agent failed.", exc)
+
+
+def orchestrator_node(state: AgentState) -> AgentState:
+    query = _required_text(state, "query")
+    if query is None:
+        return _error_update("orchestrator", "A natural-language query is required.")
+    try:
+        decision = orchestrator_agent(query)
+        update: AgentState = {"orchestration_result": decision}
+        if decision.get("needs_clarification") or decision.get("intent") == "clarification":
+            clarification = decision.get("clarification_question") or "Could you clarify what you would like help with?"
+            update.update({
+                "intent": "clarification",
+                "clarification_question": clarification,
+                "current_agent_output": clarification,
+            })
+            return update
+
+        update["intent"] = decision["intent"]
+        for key in (
+            "question", "fort", "fort_a", "fort_b", "days", "travel_style",
+            "interests", "difficulty", "region", "destination",
+        ):
+            if decision.get(key) is not None:
+                update[key] = decision[key]
+        return update
+    except Exception as exc:
+        return _error_update("orchestrator", "Orchestrator agent failed.", exc)
 
 
 def unknown_intent_node(state: AgentState) -> AgentState:
@@ -133,7 +145,7 @@ def unknown_intent_node(state: AgentState) -> AgentState:
 
 
 def route_intent(state: AgentState) -> str:
-    routes: dict[str, str] = {
+    routes = {
         "historical_question": "historical_question",
         "fort_recommendation": "fort_recommendation",
         "itinerary_planning": "itinerary_planning",
@@ -142,7 +154,17 @@ def route_intent(state: AgentState) -> str:
         COMBINED_INTENT: "fort_recommendation",
     }
     intent = state.get("intent")
-    return routes.get(intent, "unknown_intent") if isinstance(intent, str) else "unknown_intent"
+    if isinstance(intent, str) and intent in routes:
+        return routes[intent]
+    if intent is None and _required_text(state, "query"):
+        return "orchestrator"
+    return "unknown_intent"
+
+
+def route_after_orchestrator(state: AgentState) -> str:
+    if state.get("error") or state.get("clarification_question"):
+        return "end"
+    return route_intent(state)
 
 
 def route_after_recommendation(state: AgentState) -> str:
@@ -161,6 +183,7 @@ def build_graph():
     workflow.add_node("itinerary_planning", itinerary_planning_node)
     workflow.add_node("storytelling", storytelling_node)
     workflow.add_node("fort_comparison", fort_comparison_node)
+    workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("unknown_intent", unknown_intent_node)
 
     workflow.add_conditional_edges(
@@ -172,16 +195,29 @@ def build_graph():
             "itinerary_planning": "itinerary_planning",
             "storytelling": "storytelling",
             "fort_comparison": "fort_comparison",
+            "recommendation_then_itinerary": "fort_recommendation",
+            "orchestrator": "orchestrator",
             "unknown_intent": "unknown_intent",
+        },
+    )
+    workflow.add_conditional_edges(
+        "orchestrator",
+        route_after_orchestrator,
+        {
+            "historical_question": "historical_question",
+            "fort_recommendation": "fort_recommendation",
+            "itinerary_planning": "itinerary_planning",
+            "storytelling": "storytelling",
+            "fort_comparison": "fort_comparison",
+            "recommendation_then_itinerary": "fort_recommendation",
+            "unknown_intent": "unknown_intent",
+            "end": END,
         },
     )
     workflow.add_conditional_edges(
         "fort_recommendation",
         route_after_recommendation,
-        {
-            "itinerary_planning": "itinerary_planning",
-            "end": END,
-        },
+        {"itinerary_planning": "itinerary_planning", "end": END},
     )
     for node in (
         "historical_question",
@@ -191,7 +227,6 @@ def build_graph():
         "unknown_intent",
     ):
         workflow.add_edge(node, END)
-
     return workflow.compile()
 
 

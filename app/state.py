@@ -56,6 +56,7 @@ AgentIntent = Literal[
     "storytelling",
     "fort_comparison",
     "recommendation_then_itinerary",
+    "clarification",
 ]
 
 
@@ -66,14 +67,12 @@ class StateError(TypedDict):
 
 
 class AgentState(TypedDict, total=False):
-    """Shared optional state for individual requests and combined workflows.
-
-    For recommendation-to-itinerary flows, ``destination`` can hold the
-    selected fort derived from ``recommendation_result`` before planning.
-    """
+    """Shared optional state for individual requests and combined workflows."""
 
     intent: AgentIntent
     query: str
+    orchestration_result: dict[str, Any]
+    clarification_question: str
     question: str
     interests: str
     difficulty: str
