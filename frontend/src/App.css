@@ -280,3 +280,30 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* SHIVDOOT NATURAL-LANGUAGE CHAT */
+.orchestrator-chat { display: grid; gap: 14px; }
+.chat-thread { display: flex; min-height: 300px; max-height: 520px; flex-direction: column; gap: 15px; overflow-y: auto; padding: 8px 3px 14px; }
+.chat-empty { max-width: 380px; margin: auto; color: var(--muted); font-size: .92rem; line-height: 1.8; text-align: center; }
+.chat-message { display: flex; max-width: min(88%, 680px); flex-direction: column; gap: 6px; }
+.chat-message.user { align-self: flex-end; align-items: flex-end; }
+.chat-message.assistant { align-self: flex-start; align-items: flex-start; }
+.chat-sender { color: var(--muted); font-size: .76rem; font-weight: 700; }
+.chat-bubble { padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; font-size: .91rem; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat-message.user .chat-bubble { color: #fff8ed; background: var(--brown); border-color: var(--brown); border-bottom-right-radius: 3px; }
+.chat-message.assistant .chat-bubble { color: #5d493b; background: #fcf5e9; border-bottom-left-radius: 3px; }
+.chat-sources { display: grid; gap: 3px; padding-inline: 3px; color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.chat-sources b { color: #a87943; }
+.chat-loading { display: flex; align-items: center; gap: 9px; }
+.chat-compose { padding-top: 14px; border-top: 1px solid var(--border); }
+.chat-compose textarea { min-height: 82px; max-height: 180px; }
+.chat-compose-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.chat-compose-footer > span { color: var(--muted); font-size: .76rem; }
+.chat-compose-footer .button { min-width: 112px; }
+
+@media (max-width: 560px) {
+  .chat-thread { min-height: 240px; max-height: 56vh; }
+  .chat-message { max-width: 96%; }
+  .chat-compose-footer { align-items: flex-start; flex-direction: column; }
+  .chat-compose-footer .button { width: 100%; }
+}

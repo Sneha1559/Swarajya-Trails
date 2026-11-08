@@ -72,6 +72,49 @@ class OrchestratorClassificationTests(unittest.TestCase):
         self.assertEqual(result["difficulty"], "Easy")
         self.assertEqual(result["region"], "Pune")
 
+    def test_string_interests_are_preserved(self):
+        result = self.classify(
+            "Recommend forts for trekking",
+            {"intent": "fort_recommendation", "interests": "trekking, adventure"},
+        )
+        self.assertEqual(result["interests"], "trekking, adventure")
+
+    def test_list_interests_are_normalized_and_passed_to_recommendation_agent(self):
+        llm = FakeLLM(json.dumps({
+            "intent": "fort_recommendation",
+            "interests": ["trekking", "adventure"],
+            "difficulty": "moderate",
+            "region": "Maharashtra",
+        }))
+        with patch("app.orchestrator.get_llm", return_value=llm):
+            with patch("app.graph.fort_recommendation_agent", return_value={"recommendations": "Raigad"}) as agent:
+                state = graph.invoke({
+                    "query": "Recommend forts in Maharashtra for trekking and adventure",
+                })
+
+        self.assertEqual(state["interests"], "trekking, adventure")
+        agent.assert_called_once_with(
+            interests="trekking, adventure",
+            difficulty="moderate",
+            region="Maharashtra",
+        )
+
+    def test_missing_interests_do_not_block_classification(self):
+        result = self.classify(
+            "Recommend forts",
+            {"intent": "fort_recommendation"},
+        )
+        self.assertEqual(result["intent"], "fort_recommendation")
+        self.assertNotIn("interests", result)
+
+    def test_null_interests_do_not_block_classification(self):
+        result = self.classify(
+            "Recommend forts",
+            {"intent": "fort_recommendation", "interests": None},
+        )
+        self.assertEqual(result["intent"], "fort_recommendation")
+        self.assertNotIn("interests", result)
+
     def test_ambiguous_and_malformed_responses_request_clarification(self):
         with patch("app.orchestrator.get_llm", return_value=FakeLLM(json.dumps({
             "intent": "clarification",

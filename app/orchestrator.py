@@ -1,8 +1,9 @@
 import json
+import logging
 from json import JSONDecoder
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.llm import get_llm
 
@@ -15,6 +16,8 @@ OrchestratorIntent = Literal[
     "recommendation_then_itinerary",
     "clarification",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class OrchestratorDecision(BaseModel):
@@ -33,6 +36,13 @@ class OrchestratorDecision(BaseModel):
     difficulty: str | None = None
     region: str | None = None
     destination: str | None = None
+
+    @field_validator("interests", mode="before")
+    @classmethod
+    def normalize_interests(cls, value):
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            return ", ".join(value)
+        return value
 
 
 def _clarification(query: str, question: str) -> dict:
@@ -105,7 +115,12 @@ User query JSON:
     response = get_llm(0).invoke(prompt)
     try:
         decision = OrchestratorDecision.model_validate(_parse_json(response.content))
-    except (ValueError, ValidationError, TypeError):
+    except ValidationError as exc:
+        fields = sorted({".".join(str(part) for part in error["loc"]) for error in exc.errors(include_input=False)})
+        logger.warning("Orchestrator decision validation failed (fields=%s)", fields or ["unknown"])
+        return _clarification(query, "Could you clarify what you would like help with?")
+    except (ValueError, TypeError) as exc:
+        logger.warning("Orchestrator response could not be parsed (%s)", type(exc).__name__)
         return _clarification(query, "Could you clarify what you would like help with?")
 
     result = decision.model_dump(exclude_none=True)

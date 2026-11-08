@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, NavLink, Link, useNavigate } from "react-router-dom";
 import {
   Mountain, Map, BookOpen, Sparkles, ArrowRight, ArrowUpRight,
@@ -54,15 +54,6 @@ async function postData(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(typeof data.detail === "string" ? data.detail : "The request could not be completed.");
-  }
-  return data;
-}
-
-async function getData(path) {
-  const response = await fetch(`${API}${path}`);
   const data = await response.json();
   if (!response.ok) {
     throw new Error(typeof data.detail === "string" ? data.detail : "The request could not be completed.");
@@ -347,53 +338,156 @@ function Forts() {
   );
 }
 
+function getChatResponseText(data) {
+  if (data?.intent === "clarification") {
+    return data.clarification || "Could you clarify what you would like help with?";
+  }
+
+  const result = data?.result;
+  if (typeof result === "string") return result;
+  if (!result || typeof result !== "object") {
+    throw new Error("The assistant returned an empty response.");
+  }
+
+  const sections = [];
+  if (typeof result.answer === "string") sections.push(result.answer);
+  if (typeof result.recommendations === "string") {
+    sections.push(`Fort recommendations\n${result.recommendations}`);
+  }
+  if (typeof result.itinerary === "string") {
+    const heading = result.destination
+      ? `Itinerary for ${result.destination}${result.days ? ` (${result.days} days)` : ""}`
+      : "Itinerary";
+    sections.push(`${heading}\n${result.itinerary}`);
+  } else if (result.itinerary && typeof result.itinerary === "object") {
+    const plan = result.itinerary;
+    const heading = plan.destination
+      ? `Itinerary for ${plan.destination}${plan.days ? ` (${plan.days} days)` : ""}`
+      : "Itinerary";
+    sections.push(`${heading}\n${plan.itinerary || JSON.stringify(plan, null, 2)}`);
+  }
+  if (typeof result.story === "string") sections.push(result.story);
+  if (typeof result.comparison === "string") {
+    sections.push(`Comparison: ${result.fort_a} and ${result.fort_b}\n${result.comparison}`);
+  }
+
+  return sections.length ? sections.join("\n\n") : JSON.stringify(result, null, 2);
+}
+
 function History() {
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState("");
+  const [messages, setMessages] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const pendingRef = useRef(false);
+  const messagesEndRef = useRef(null);
   const samples = [
-    "What is the historical importance of Raigad Fort?",
-    "Why is Sinhagad Fort famous?",
-    "What role did forts play in Swarajya?"
+    "Tell me about the historical importance of Raigad Fort.",
+    "Suggest forts in Maharashtra for trekking.",
+    "Plan a 2-day trip to Raigad Fort.",
+    "Tell me an interesting story about Sinhagad Fort.",
+    "Compare Raigad Fort and Sinhagad Fort."
   ];
 
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
+  }, [messages, loading]);
+
   async function ask(q = question) {
-    if (!q.trim()) return;
-    setQuestion(q); setLoading(true); setError(""); setAnswer("");
+    const query = q.trim();
+    if (!query || pendingRef.current) return;
+
+    pendingRef.current = true;
+    setQuestion(query);
+    setMessages(current => [...current, { role: "user", content: query }]);
+    setLoading(true);
+    setError("");
     try {
-      const data = await getData(`/ask-history?question=${encodeURIComponent(q.trim())}`);
-      setAnswer(getText(data, ["answer", "response", "result"]));
-    } catch (err) { setError(err.message); }
-    finally { setLoading(false); }
+      const data = await postData("/chat", { query });
+      const content = getChatResponseText(data);
+      setMessages(current => [...current, {
+        role: "assistant",
+        content,
+        sources: Array.isArray(data.sources) ? data.sources : [],
+        intent: data.intent
+      }]);
+      setQuestion("");
+    } catch (err) {
+      const message = err instanceof TypeError
+        ? "Could not reach the Swarajya Trails server. Check that the backend is running at 127.0.0.1:8000."
+        : err.message || "The request could not be completed. Please try again.";
+      setError(message);
+    } finally {
+      pendingRef.current = false;
+      setLoading(false);
+    }
   }
 
   return (
     <main className="page-shell">
-      <PageHeading eyebrow="HISTORY, EXPLAINED" title="Ask" accent="शिवदूत" description="Ask about Maharashtra's forts, Maratha history, architecture and historical events." />
+      <PageHeading eyebrow="SHIVDOOT, YOUR HERITAGE COMPANION" title="Ask" accent="Shivdoot." description="Ask naturally about Maharashtra's history, forts, travel plans, stories or comparisons. Shivdoot will find the right guide for your request." />
       <div className="workspace two-column">
         <aside className="panel prompt-panel">
           <span className="large-icon"><BookOpen size={25} /></span>
-          <h2>Every fort has a story.</h2>
-          <p>Ask शिवदूत a question and explore answers from the historical knowledge available to Swarajya Trails.</p>
+          <h2>One companion. Many ways to explore.</h2>
+          <p>Write what you want to know or plan. You do not need to choose an agent.</p>
           <h3>Try asking</h3>
-          <div className="sample-list">{samples.map(q => <button key={q} onClick={() => ask(q)} disabled={loading}>{q}<ArrowUpRight size={15} /></button>)}</div>
+          <div className="sample-list">
+            {samples.map(q => <button key={q} onClick={() => ask(q)} disabled={loading}>{q}<ArrowUpRight size={15} /></button>)}
+          </div>
         </aside>
-        <ResultPanel title="शिवदूत — Your Historical Guide" subtitle="Ask a question about the past" icon={Sparkles}>
-          <form className="question-form" onSubmit={e => { e.preventDefault(); ask(); }}>
-            <textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask about Raigad, Shivaji Maharaj, Maratha history..." rows={4} />
-            <button className="button button-dark full-button" disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={18} /> : <Send size={17} />}{loading ? "Researching..." : "Ask शिवदूत"}</button>
-          </form>
-          <Message error={error} />
-          {loading && <LoadingState text="Searching the historical knowledge base..." />}
-          {!loading && !answer && !error && <EmptyState title="Ready to explore history?" text="Enter a question or choose a suggestion." />}
-          {!loading && answer && <div className="ai-result answer-result">{answer}</div>}
+        <ResultPanel title="Shivdoot Chat" subtitle="Ask about history, forts and heritage travel" icon={Sparkles}>
+          <div className="orchestrator-chat">
+            <div className="chat-thread" role="log" aria-label="Conversation with Shivdoot" aria-live="polite" aria-relevant="additions">
+              {!messages.length && !loading && <p className="chat-empty">Your conversation will appear here. Try one of the suggestions or ask in your own words.</p>}
+              {messages.map((message, index) => (
+                <article className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+                  <span className="chat-sender">{message.role === "user" ? "You" : "Shivdoot"}</span>
+                  <div className="chat-bubble">{message.content}</div>
+                  {message.role === "assistant" && message.sources?.length > 0 && (
+                    <div className="chat-sources"><b>Sources</b>{message.sources.join(", ")}</div>
+                  )}
+                </article>
+              ))}
+              {loading && (
+                <div className="chat-message assistant" role="status">
+                  <span className="chat-sender">Shivdoot</span>
+                  <div className="chat-bubble chat-loading"><LoaderCircle className="spin" size={17} /> Thinking through your request...</div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+            <Message error={error} />
+            <form className="question-form chat-compose" onSubmit={e => { e.preventDefault(); ask(); }}>
+              <textarea
+                value={question}
+                onChange={e => setQuestion(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    ask();
+                  }
+                }}
+                placeholder="Ask a question or describe the trip you have in mind..."
+                aria-label="Message Shivdoot"
+                rows={3}
+                disabled={loading}
+                required
+              />
+              <div className="chat-compose-footer">
+                <span>Enter to send · Shift+Enter for a new line</span>
+                <button type="submit" className="button button-dark" disabled={loading || !question.trim()}>
+                  {loading ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}
+                  {loading ? "Sending..." : "Send"}
+                </button>
+              </div>
+            </form>
+          </div>
         </ResultPanel>
       </div>
     </main>
   );
 }
-
 function Itinerary() {
   const [destination, setDestination] = useState("Raigad Fort");
   const [days, setDays] = useState("2");
